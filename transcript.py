@@ -26,6 +26,39 @@ def extract_video_id(url: str) -> str:
     raise ValueError(f"Invalid YouTube URL: {url}")
 
 
+def is_channel_url(url: str) -> bool:
+    return bool(re.search(r'youtube\.com/(@[\w.-]+|channel/[\w-]+|c/[\w-]+)', url))
+
+
+def fetch_channel_top_videos(url: str, limit: int) -> list[str]:
+    """Fetch top N most popular video IDs from a channel using yt-dlp."""
+    import json
+    import subprocess
+
+    # Add /videos?sort=p to get sorted by popular
+    channel_url = re.sub(r'(/videos)?/?(\?.*)?$', '', url)
+    channel_url += "/videos?view=0&sort=p"
+
+    cmd = [
+        "yt-dlp", "--flat-playlist", "--dump-json",
+        "--playlist-items", f"1:{limit}",
+        "--no-warnings", "--quiet",
+        channel_url,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "yt-dlp failed to fetch channel")
+
+    ids = []
+    for line in result.stdout.strip().split("\n"):
+        if line:
+            entry = json.loads(line)
+            vid = entry.get("id")
+            if vid:
+                ids.append(vid)
+    return ids
+
+
 def extract_playlist_id(url: str) -> str | None:
     match = re.search(r'[?&]list=([\w-]+)', url)
     return match.group(1) if match else None
@@ -108,17 +141,64 @@ def main():
         "-p", "--playlist", action="store_true",
         help="Force treat URL as playlist",
     )
+    parser.add_argument(
+        "-n", "--top", type=int, default=10,
+        help="Number of top videos to fetch from channel (default: 10)",
+    )
     args = parser.parse_args()
 
     languages = [lang.strip() for lang in args.lang.split(",")]
     api = YouTubeTranscriptApi()
     output_dir = os.environ.get("YTRANS_DIR")
 
-    # Determine if playlist
+    # Determine URL type: channel, playlist, or single video
     playlist_id = extract_playlist_id(args.url)
     is_playlist = args.playlist or (playlist_id is not None)
+    is_channel = is_channel_url(args.url)
 
-    if is_playlist:
+    # Channel → fetch top N popular videos, then process like a batch
+    if is_channel:
+        try:
+            video_ids = fetch_channel_top_videos(args.url, args.top)
+        except Exception as e:
+            print(f"Failed to fetch channel: {e}", file=sys.stderr)
+            sys.exit(3)
+
+        if not video_ids:
+            print("No videos found on channel.", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"Channel top {len(video_ids)} videos", file=sys.stderr)
+        ok, skip, fail = 0, 0, 0
+        total = len(video_ids)
+
+        for i, video_id in enumerate(video_ids, 1):
+            output_path = args.output
+            if not output_path and output_dir:
+                output_path = f"{output_dir}/{video_id}.md"
+            if output_path and os.path.exists(output_path):
+                print(f"[{i}/{total}] EXISTS {video_id}, skipping", file=sys.stderr)
+                skip += 1
+                continue
+
+            try:
+                title, content, lang, lang_code = transcribe_video(
+                    api, video_id, languages, args.timestamps,
+                )
+                print(f"[{i}/{total}] {title} ({lang_code})", file=sys.stderr)
+                save_or_print(content, output_path)
+                ok += 1
+            except (TranscriptsDisabled, NoTranscriptFound):
+                print(f"[{i}/{total}] SKIP {video_id} — no transcript", file=sys.stderr)
+                skip += 1
+            except Exception as e:
+                print(f"[{i}/{total}] FAIL {video_id}", file=sys.stderr)
+                fail += 1
+
+        print(f"\nDone: {ok} ok, {skip} skipped, {fail} failed", file=sys.stderr)
+        sys.exit(0 if fail == 0 else 2)
+
+    elif is_playlist:
         if not playlist_id:
             print("No playlist ID found in URL.", file=sys.stderr)
             sys.exit(1)
