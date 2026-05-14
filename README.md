@@ -1,38 +1,82 @@
-# YouTube Transcript Extractor
+# ytrans
 
-Docker CLI tool to extract subtitles/transcripts from YouTube videos.
+CLI-утилита для извлечения транскрипций YouTube-видео. Сохраняет в заданную папку как `.md`.
 
-## Build
-
-```bash
-docker build -t yt-transcript .
-```
-
-## Usage
+## Установка
 
 ```bash
-# Auto-save to Obsidian vault (Видео)
-docker run --rm -v ~/Library/Mobile\ Documents/iCloud~md~obsidian/Documents/base/Видео:/obsidian yt-transcript "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+# Зависимости
+pip3 install youtube-transcript-api
+brew install yt-dlp  # нужен для каналов
 
-# Output to stdout
-docker run --rm yt-transcript "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-
-# Pipe to file on host
-docker run --rm yt-transcript "https://www.youtube.com/watch?v=dQw4w9WgXcQ" > transcript.txt
-
-# Specify preferred languages (default: ru, en)
-docker run --rm -v ~/Library/Mobile\ Documents/iCloud~md~obsidian/Documents/base/Видео:/obsidian yt-transcript --lang ru,en "https://youtu.be/dQw4w9WgXcQ"
-
-# With timestamps
-docker run --rm -v ~/Library/Mobile\ Documents/iCloud~md~obsidian/Documents/base/Видео:/obsidian yt-transcript --timestamps "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-
-# Save to specific file
-docker run --rm -v ~/Library/Mobile\ Documents/iCloud~md~obsidian/Documents/base/Видео:/obsidian yt-transcript -o /obsidian/my_transcript.txt "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+# Алиас в ~/.zshrc
+ytrans() {
+  YTRANS_DIR="$HOME/<your_folder_with_documents>" \
+  python3 <your_folder_with_this_project>/transcript.py "$@"
+}
 ```
 
-## Limitations
+## Использование
 
-- Private videos cannot be accessed
-- Age-restricted videos are not supported
-- Videos without any subtitles (manual or auto-generated) will return an error
-- Some videos may have transcripts disabled by the uploader
+### Одно видео
+
+```bash
+ytrans "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+```
+
+### Плейлист
+
+```bash
+# Автоопределение по list= в URL
+ytrans "https://www.youtube.com/playlist?list=PLrAXtmErZgOe..."
+
+# Или явно с -p
+ytrans -p "https://www.youtube.com/watch?v=xxx&list=PLrAXt..."
+```
+
+### Канал — топ популярных видео
+
+```bash
+# Топ 10 (по умолчанию)
+ytrans "https://www.youtube.com/@channelname"
+
+# Топ 5
+ytrans -n 5 "https://www.youtube.com/@channelname"
+```
+
+### Флаги
+
+| Флаг | Описание |
+|------|----------|
+| `--lang ru,en` | Приоритет языков субтитров (по умолчанию: `ru,en`) |
+| `--timestamps` | Добавить `[MM:SS]` перед каждой строкой |
+| `-o path` | Сохранить в конкретный файл |
+| `-p` | Принудительно обработать как плейлист |
+| `-n N` | Количество топ видео с канала (по умолчанию: 10) |
+
+### Примеры
+
+```bash
+# С таймкодами
+ytrans --timestamps "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+# Только английские субтитры
+ytrans --lang en "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+# В stdout (без YTRANS_DIR)
+python3 transcript.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ" > transcript.txt
+```
+
+## Как это работает
+
+- Видео/плейлист: `youtube-transcript-api` (Python)
+- Каналы (топ видео): `yt-dlp` для получения списка, затем `youtube-transcript-api` для транскрипции
+- Файлы сохраняются как `{video_id}.md` с заголовком `# Название видео`
+- Уже скачанные видео пропускаются (проверка по файлу)
+
+## Ограничения
+
+- Приватные видео — нет доступа
+- Age-restricted — не поддерживается (ограничение библиотеки)
+- Видео без субтитров — пропускаются
+- При массовом скачивании YouTube может временно заблокировать IP (429). Решение: VPN или подождать
